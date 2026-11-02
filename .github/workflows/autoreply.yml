@@ -54,7 +54,8 @@ jobs:
         run: |
           git config user.name "autoreply-bot"
           git config user.email "autoreply-bot@users.noreply.github.com"
-          git add state.json 2>/dev/null || exit 0
+          git add state.json 2>/dev/null || true
+          git add -A -- retry.json 2>/dev/null || true
           git diff --cached --quiet && exit 0
           git commit -m "Обновить список обработанных комментариев"
           git pull --rebase

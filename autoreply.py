@@ -33,6 +33,9 @@ OWN_USERNAME = "bezuchebnikaeng"
 ROOT = Path(__file__).parent
 KEYWORDS_FILE = ROOT / "keywords.yml"
 STATE_FILE = ROOT / "state.json"
+# Повторная попытка для комментариев, на которые директ не ушёл из-за сбоя Meta.
+# Пока файл есть, скрипт осторожно (сначала по 5 за запуск) пробует их снова.
+RETRY_FILE = ROOT / "retry.json"
 
 MEDIA_TO_SCAN = 50  # сколько последних публикаций проверять
 REPLY_WINDOW = timedelta(days=7)  # Meta разрешает личный ответ в течение 7 дней
@@ -40,6 +43,8 @@ SAFETY_MARGIN = timedelta(hours=2)  # не пытаемся отвечать н�
 MAX_SENDS_PER_RUN = 40  # директ: до ~240 в час при запуске раз в 10 минут (лимит Meta 750)
 MAX_PUBLIC_PER_RUN = 5  # публичные ответы: до ~30 в час, остальные ждут в очереди
 PAUSE_SECONDS = (3, 5)  # случайная пауза между отправками
+FAIL_STREAK_STOP = 5  # столько одинаковых ошибок подряд = сбой у Meta, останавливаемся
+RETRY_START = 5  # повторных попыток за запуск, пока не убедимся, что Meta принимает
 REMEMBER_IDS = 30000  # сколько id обработанных комментариев хранить
 
 TOKEN = os.environ.get("IG_PAGE_TOKEN", "")
@@ -288,8 +293,19 @@ def main():
     stopped = None
 
     def done(cid):
-        handled.add(cid)
-        state["handled"].append(cid)
+        if cid not in handled:
+            handled.add(cid)
+            state["handled"].append(cid)
+
+    retry = None
+    if RETRY_FILE.exists() and not first_run:
+        retry = json.loads(RETRY_FILE.read_text(encoding="utf-8"))
+        retry.setdefault("limit", RETRY_START)
+        retry.setdefault("skip", [])
+        log(f"Повторная попытка для не получивших директ: до {retry['limit']} за запуск")
+    retry_skip = set(retry["skip"]) if retry else set()
+    rstats = dict(tried=0, ok=0, left=0)
+    streak = []  # комментарии подряд с одинаковой ошибкой
 
     media = []
     public = 0
@@ -303,13 +319,13 @@ def main():
         for m in media:
             mid = m["id"]
             total = m.get("comments_count", 0)
-            if not first_run and counts.get(mid) == total and mid not in pending_media:
+            if not first_run and not retry and counts.get(mid) == total and mid not in pending_media:
                 continue  # новых комментариев нет
 
             # Комментарии приходят от новых к старым. Дальше 7 дней не читаем, а если
             # на этой публикации не осталось хвостов, останавливаемся на первом уже
             # обработанном комментарии: всё, что старше, мы уже видели.
-            quick = not first_run and mid not in pending_media
+            quick = not first_run and not retry and mid not in pending_media
             comments = get_all(
                 f"{mid}/comments",
                 {
@@ -329,10 +345,20 @@ def main():
             leftovers = False
             for c in flat:
                 cid = c["id"]
-                if cid in handled:
-                    continue
                 author = c.get("username") or c.get("from", {}).get("username", "")
                 key = author.lower()
+                is_retry = False
+                if cid in handled:
+                    # Повтор: комментарий с кодовым словом, автор директ так и не получил.
+                    if not (retry and cid not in retry_skip and key != OWN_USERNAME
+                            and key not in sent_users and key not in already_talking
+                            and parse_ts(c["timestamp"]) >= cutoff and match(c.get("text"), rules)):
+                        continue
+                    if rstats["tried"] >= retry["limit"] or stopped or stats["sent"] >= MAX_SENDS_PER_RUN:
+                        rstats["left"] += 1
+                        continue
+                    is_retry = True
+                    rstats["tried"] += 1
                 if key == OWN_USERNAME:
                     done(cid)
                     continue
@@ -369,8 +395,15 @@ def main():
                             "message": {"text": rule["message"]},
                         },
                     )
-                    log(f"Директ @{author}")
+                    log(f"Директ @{author}" + (" (повтор)" if is_retry else ""))
                     stats["sent"] += 1
+                    if is_retry:
+                        rstats["ok"] += 1
+                    # Ошибки перед успехом были у отдельных людей, а не сбой: закрываем их.
+                    for f_cid in streak:
+                        done(f_cid)
+                        retry_skip.add(f_cid)
+                    streak = []
                     sent_users[key] = today
                     if rule["comment_replies"]:
                         entry = {
@@ -381,7 +414,7 @@ def main():
                         }
                         # Новым комментариям публичный ответ вперёд очереди,
                         # старым (первый запуск) в конец, они идут медленно.
-                        if backlog:
+                        if backlog or is_retry:
                             state["public_queue"].append(entry)
                         else:
                             state["public_queue"].insert(0, entry)
@@ -392,13 +425,27 @@ def main():
                     leftovers = True
                     log(f"Остановка отправки до следующего запуска: {e}")
                 except RuntimeError as e:
-                    # Например, ответ на этот комментарий уже отправлен или человек
-                    # закрыл сообщения. Запоминаем и идём дальше.
                     stats["failed"] += 1
                     log(f"Не отправилось @{author}: {e}")
-                    done(cid)
+                    if '"error_subcode":2534025' in str(e):
+                        # Комментарий не подходит для личного ответа (удалён, старый,
+                        # уже отвечен, закрыты сообщения). Это точно про этого человека.
+                        done(cid)
+                        retry_skip.add(cid)
+                        continue
+                    # Остальные ошибки могут быть сбоем у Meta: пока не помечаем.
+                    streak.append(cid)
+                    if len(streak) >= FAIL_STREAK_STOP:
+                        stopped = StopSending(
+                            f"{FAIL_STREAK_STOP} ошибок подряд, похоже на сбой у Meta: {e}"
+                        )
+                        leftovers = True
+                        log(f"Остановка отправки до следующего запуска: {stopped}")
+                    continue
 
             counts[mid] = total
+            if streak and not stopped:
+                leftovers = True  # не помеченные ошибки попробуем в следующий раз
             if leftovers:
                 pending_media.add(mid)
             else:
@@ -413,6 +460,17 @@ def main():
     finally:
         # Сохраняем, даже если запуск упал на середине: кому ушло, тому не повторяем.
         finish(state, counts, pending_media, sent_users, media, today)
+        if retry and not DRY_RUN:
+            if rstats["tried"] == 0 and rstats["left"] == 0 and not stopped and media:
+                RETRY_FILE.unlink()
+                log("Повторная попытка завершена: больше некому отправлять")
+            else:
+                if rstats["ok"] >= 3 and not stopped:
+                    retry["limit"] = MAX_SENDS_PER_RUN  # Meta принимает, идём в обычном темпе
+                elif stopped:
+                    retry["limit"] = RETRY_START
+                retry["skip"] = sorted(retry_skip)
+                RETRY_FILE.write_text(json.dumps(retry, ensure_ascii=False) + "\n", encoding="utf-8")
 
     if DRY_RUN:
         log(f"Проверка: директ ушёл бы {stats['would']} людям.")
@@ -422,9 +480,11 @@ def main():
         f"Пропущено: старше 7 дней {stats['old']}, уже есть переписка {stats['talking']}, "
         f"повторно тому же человеку {stats['repeat']}, ошибок {stats['failed']}."
     )
+    if retry:
+        log(f"Повтор: попробовали {rstats['tried']}, ушло {rstats['ok']}, ждут {rstats['left']}.")
     # Есть ли ещё работа: хвост очереди директа или публичных ответов.
     # Workflow по этому флагу сам запускает следующий шаг (пока расписание не работает).
-    more = bool(state["pending_media"] or state["public_queue"])
+    more = bool(state["pending_media"] or state["public_queue"] or RETRY_FILE.exists())
     if stopped and getattr(stopped, "code", None) in AUTH_CODES:
         more = False  # без доступа крутиться бессмысленно
     out = os.environ.get("GITHUB_OUTPUT")
