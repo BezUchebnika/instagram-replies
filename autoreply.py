@@ -1,11 +1,12 @@
 """Автоответ на кодовые слова в комментариях Instagram (bezuchebnikaeng).
 
-Раз в несколько минут (через GitHub Actions) скрипт:
-1. смотрит последние публикации аккаунта и находит те, где выросло число комментариев;
+Каждые ~10 минут (через GitHub Actions) скрипт:
+1. смотрит последние публикации и находит те, где выросло число комментариев;
 2. читает новые комментарии (и ответы в ветках);
 3. если в комментарии есть кодовое слово из keywords.yml, отправляет автору
    одно личное сообщение (Private Reply) через Instagram API;
-4. запоминает обработанные комментарии в state.json, чтобы не писать дважды.
+4. ставит публичный ответ под комментарием в очередь и публикует понемногу;
+5. запоминает обработанное в state.json, чтобы не писать дважды.
 
 Ключ доступа берётся из секрета репозитория IG_PAGE_TOKEN.
 """
@@ -35,15 +36,25 @@ STATE_FILE = ROOT / "state.json"
 
 MEDIA_TO_SCAN = 50  # сколько последних публикаций проверять
 REPLY_WINDOW = timedelta(days=7)  # Meta разрешает личный ответ в течение 7 дней
-MAX_SENDS_PER_RUN = 40  # до ~240 в час при запуске раз в 10 минут; лимит Meta 750
+SAFETY_MARGIN = timedelta(hours=2)  # не пытаемся отвечать на самом краю окна
+MAX_SENDS_PER_RUN = 40  # директ: до ~240 в час при запуске раз в 10 минут (лимит Meta 750)
+MAX_PUBLIC_PER_RUN = 5  # публичные ответы: до ~30 в час, остальные ждут в очереди
 PAUSE_SECONDS = (3, 5)  # случайная пауза между отправками
-REMEMBER_IDS = 20000  # сколько id обработанных комментариев хранить
+REMEMBER_IDS = 30000  # сколько id обработанных комментариев хранить
 
 TOKEN = os.environ.get("IG_PAGE_TOKEN", "")
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("1", "true", "yes")
 # Что делать, если state.json ещё нет: remember (только запомнить) или backlog
 # (ответить за последние 7 дней). Пусто: ничего не делать, ждать ручного запуска.
 FIRST_RUN = os.environ.get("FIRST_RUN", "")
+
+# Коды ошибок Meta, при которых надо остановиться и попробовать в следующий раз:
+# лимиты запросов и временные блокировки действий.
+STOP_CODES = {4, 17, 32, 368, 613, 80002, 80006}
+
+
+class StopSending(Exception):
+    pass
 
 
 def log(msg):
@@ -54,6 +65,10 @@ def api(method, path, params=None, body=None):
     params = dict(params or {})
     params["access_token"] = TOKEN
     url = f"{API}/{path}?{urllib.parse.urlencode(params)}"
+    return _request(method, url, path, body)
+
+
+def _request(method, url, label, body=None):
     data = None
     headers = {}
     if body is not None:
@@ -65,14 +80,20 @@ def api(method, path, params=None, body=None):
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")
-        raise RuntimeError(f"{method} {path} -> HTTP {e.code}: {detail}") from None
+        try:
+            code = json.loads(detail).get("error", {}).get("code")
+        except ValueError:
+            code = None
+        if code in STOP_CODES or e.code == 429:
+            raise StopSending(f"{method} {label} -> лимит или блокировка Meta: {detail}") from None
+        raise RuntimeError(f"{method} {label} -> HTTP {e.code}: {detail}") from None
 
 
-def get_all(path, params, stop=None):
+def get_all(path, params, stop=None, max_pages=100):
     """Постранично собирает список; stop(item) -> True прекращает чтение."""
     out = []
     data = api("GET", path, params)
-    while True:
+    for _ in range(max_pages):
         for item in data.get("data", []):
             if stop and stop(item):
                 return out
@@ -80,8 +101,8 @@ def get_all(path, params, stop=None):
         nxt = data.get("paging", {}).get("next")
         if not nxt:
             return out
-        with urllib.request.urlopen(nxt, timeout=30) as resp:
-            data = json.loads(resp.read())
+        data = _request("GET", nxt, f"{path} (следующая страница)")
+    return out
 
 
 # Латинские буквы, которые выглядят как русские. В словах, где есть кириллица,
@@ -99,7 +120,7 @@ def normalize(text):
 
 def load_keywords():
     cfg = yaml.safe_load(KEYWORDS_FILE.read_text(encoding="utf-8")) or {}
-    rules = []
+    rules = {}
     for name, entry in (cfg.get("keywords") or {}).items():
         entry = entry or {}
         message = (entry.get("message") or "").strip()
@@ -107,42 +128,28 @@ def load_keywords():
             log(f"Кодовое слово «{name}» пропущено: выключено или нет текста сообщения")
             continue
         words = [name] + list(entry.get("also") or [])
-        rules.append(
-            {
-                "name": name,
-                "words": [normalize(w) for w in words],
-                "message": message,
-                "comment_replies": [
-                    r.strip() for r in (entry.get("comment_replies") or []) if r and r.strip()
-                ],
-            }
-        )
+        rules[name] = {
+            "name": name,
+            "words": [normalize(w) for w in words],
+            "message": message,
+            "comment_replies": [
+                r.strip() for r in (entry.get("comment_replies") or []) if r and r.strip()
+            ],
+        }
     return rules
 
 
 def match(text, rules):
     norm = f" {normalize(text)} "
-    for rule in rules:
+    for rule in rules.values():
         for w in rule["words"]:
             if w and f" {w} " in norm:
                 return rule
     return None
 
 
-def post_public_reply(comment, author, rule):
-    """Публичный ответ под комментарием. Ошибка здесь не мешает директу."""
-    if not rule["comment_replies"]:
-        return
-    text = random.choice(rule["comment_replies"])
-    target = comment["id"]
-    if comment.get("_parent"):
-        # На ответ в ветке Instagram отвечать не даёт: отвечаем в ту же ветку с упоминанием.
-        target = comment["_parent"]
-        text = f"@{author} {text}"
-    try:
-        api("POST", f"{target}/replies", {"message": text})
-    except RuntimeError as e:
-        log(f"Публичный ответ @{author} не опубликован: {e}")
+def now_utc():
+    return datetime.now(timezone.utc)
 
 
 def parse_ts(ts):
@@ -169,15 +176,63 @@ def recent_conversation_usernames(days=8):
     convs = get_all(
         f"{PAGE_ID}/conversations",
         {"platform": "instagram", "fields": "participants,updated_time", "limit": 50},
-        stop=lambda c: parse_ts(c["updated_time"]) < since,
+        max_pages=80,
     )
     names = set()
+    recent = 0
     for conv in convs:
+        if parse_ts(conv["updated_time"]) < since:
+            continue
+        recent += 1
         for p in conv.get("participants", {}).get("data", []):
-            if p.get("username") and p["username"] != OWN_USERNAME:
+            if p.get("username") and p["username"].lower() != OWN_USERNAME:
                 names.add(p["username"].lower())
-    log(f"Переписок за последние {days} дн.: {len(convs)}, людей: {len(names)}")
+    log(f"Переписок в директе за последние {days} дн.: {recent}, людей: {len(names)}")
     return names
+
+
+def publish_queue(state, rules):
+    """Публикует несколько публичных ответов из очереди. Новые стоят первыми."""
+    queue = state["public_queue"]
+    posted = 0
+    while queue and posted < MAX_PUBLIC_PER_RUN:
+        item = queue[0]
+        rule = rules.get(item["rule"])
+        if not rule or not rule["comment_replies"]:
+            queue.pop(0)
+            continue
+        text = random.choice(rule["comment_replies"])
+        target = item["comment_id"]
+        if item.get("parent"):
+            # На ответ в ветке Instagram отвечать не даёт: отвечаем в ту же ветку
+            # с упоминанием человека.
+            target = item["parent"]
+            text = f"@{item['author']} {text}"
+        if DRY_RUN:
+            log(f"[проверка] публичный ответ @{item['author']}: {text}")
+            queue.pop(0)
+            posted += 1
+            continue
+        try:
+            api("POST", f"{target}/replies", {"message": text})
+            log(f"Публичный ответ @{item['author']}")
+            posted += 1
+        except RuntimeError as e:
+            log(f"Публичный ответ @{item['author']} не опубликован: {e}")
+        queue.pop(0)
+        time.sleep(random.uniform(*PAUSE_SECONDS))
+    return posted
+
+
+def finish(state, counts, pending_media, sent_users, media, today):
+    media_ids = {m["id"] for m in media}
+    if media_ids:
+        state["comment_counts"] = {k: v for k, v in counts.items() if k in media_ids}
+        state["pending_media"] = sorted(pending_media & media_ids)
+    state["sent_users"] = sent_users
+    state["last_run"] = today
+    if not DRY_RUN:
+        save_state(state)
 
 
 def main():
@@ -190,131 +245,177 @@ def main():
     backlog = False
     if first_run:
         if FIRST_RUN == "remember":
-            # Всё, что уже есть, считаем обработанным, ничего не отправляем.
             log("Первый запуск: запоминаю существующие комментарии без отправки")
         elif FIRST_RUN == "backlog":
-            # Отвечаем на кодовые слова за последние 7 дней, кроме тех,
-            # с кем уже есть переписка в директе.
             log("Первый запуск: отвечаю на комментарии за последние 7 дней")
             backlog = True
         else:
             log("Ждём первого ручного запуска (Run workflow): пока ничего не делаю")
             return
-        state = {"handled": [], "comment_counts": {}, "sent_users": {}}
+        state = {"handled": [], "comment_counts": {}}
     state.setdefault("sent_users", {})
+    state.setdefault("public_queue", [])
+    state.setdefault("pending_media", [])
 
-    already_talking = recent_conversation_usernames() if backlog else set()
+    # Список «уже есть переписка» берём при первом запуске и помним 8 дней,
+    # чтобы хвост очереди в следующих запусках тоже их пропускал.
+    if backlog:
+        until = (now_utc() + timedelta(days=8)).strftime("%Y-%m-%d")
+        state["skip_users"] = {u: until for u in recent_conversation_usernames()}
+    today_str = now_utc().strftime("%Y-%m-%d")
+    state["skip_users"] = {u: d for u, d in state.get("skip_users", {}).items() if d >= today_str}
+    already_talking = set(state["skip_users"])
     remember_only = first_run and not backlog
 
     handled = set(state["handled"])
     counts = state["comment_counts"]
+    pending_media = set(state["pending_media"])
     now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
-    # Кому уже отправляли за последние 7 дней: второй раз тому же человеку не шлём.
+    cutoff = now - REPLY_WINDOW + SAFETY_MARGIN
     week_ago = (now - REPLY_WINDOW).strftime("%Y-%m-%d")
+    # Кому уже отправляли за последние 7 дней: второй раз тому же человеку не шлём.
     sent_users = {u: d for u, d in state["sent_users"].items() if d >= week_ago}
-    sent = would_send = skipped_old = skipped_talking = skipped_repeat = 0
+    stats = dict(sent=0, would=0, old=0, talking=0, repeat=0, failed=0)
+    stopped = None
 
     def done(cid):
         handled.add(cid)
         state["handled"].append(cid)
 
-    media = api(
-        "GET",
-        f"{IG_USER_ID}/media",
-        {"fields": "id,comments_count,timestamp,permalink", "limit": MEDIA_TO_SCAN},
-    ).get("data", [])
+    media = []
+    public = 0
+    try:
+        media = api(
+            "GET",
+            f"{IG_USER_ID}/media",
+            {"fields": "id,comments_count,timestamp", "limit": MEDIA_TO_SCAN},
+        ).get("data", [])
 
-    for m in media:
-        mid = m["id"]
-        total = m.get("comments_count", 0)
-        if not first_run and counts.get(mid) == total:
-            continue  # новых комментариев нет
+        for m in media:
+            mid = m["id"]
+            total = m.get("comments_count", 0)
+            if not first_run and counts.get(mid) == total and mid not in pending_media:
+                continue  # новых комментариев нет
 
-        comments = get_all(
-            f"{mid}/comments",
-            {
-                "fields": "id,text,timestamp,username,from,"
-                "replies{id,text,timestamp,username,from}",
-                "limit": 50,
-            },
-        )
-        flat = []
-        for c in comments:
-            flat.append(c)
-            for r in c.get("replies", {}).get("data", []):
-                r["_parent"] = c["id"]
-                flat.append(r)
+            # Комментарии приходят от новых к старым. Дальше 7 дней не читаем, а если
+            # на этой публикации не осталось хвостов, останавливаемся на первом уже
+            # обработанном комментарии: всё, что старше, мы уже видели.
+            quick = not first_run and mid not in pending_media
+            comments = get_all(
+                f"{mid}/comments",
+                {
+                    "fields": "id,text,timestamp,username,from,"
+                    "replies{id,text,timestamp,username,from}",
+                    "limit": 50,
+                },
+                stop=lambda c: parse_ts(c["timestamp"]) < cutoff or (quick and c["id"] in handled),
+            )
+            flat = []
+            for c in comments:
+                flat.append(c)
+                for r in c.get("replies", {}).get("data", []):
+                    r["_parent"] = c["id"]
+                    flat.append(r)
 
-        all_done = True
-        for c in flat:
-            cid = c["id"]
-            if cid in handled:
-                continue
-            author = c.get("username") or c.get("from", {}).get("username", "")
-            key = author.lower()
-            if author == OWN_USERNAME:
-                done(cid)
-                continue
-            rule = match(c.get("text"), rules)
-            if remember_only or not rule:
-                done(cid)
-                continue
-            if now - parse_ts(c["timestamp"]) > REPLY_WINDOW - timedelta(hours=2):
-                skipped_old += 1
-                done(cid)
-                continue
-            if key in already_talking:
-                skipped_talking += 1
-                done(cid)
-                continue
-            if key in sent_users:
-                skipped_repeat += 1
-                done(cid)
-                continue
-            if DRY_RUN:
-                would_send += 1
-                log(f"[проверка] ответил бы @{author} на «{c.get('text')}» ({rule['name']})")
-                sent_users[key] = today
-                continue
-            if sent >= MAX_SENDS_PER_RUN:
-                all_done = False
-                continue
-            try:
-                api(
-                    "POST",
-                    f"{PAGE_ID}/messages",
-                    body={
-                        "recipient": {"comment_id": cid},
-                        "message": {"text": rule["message"]},
-                    },
-                )
-                log(f"Отправлено @{author} ({rule['name']})")
-                sent += 1
-                sent_users[key] = today
-                time.sleep(random.uniform(*PAUSE_SECONDS))
-                post_public_reply(c, author, rule)
-                time.sleep(random.uniform(*PAUSE_SECONDS))
-            except RuntimeError as e:
-                # Например, ответ на этот комментарий уже отправлен (Meta не даёт
-                # отправить второй). Запоминаем и идём дальше.
-                log(f"Не отправилось @{author}: {e}")
-            done(cid)
+            leftovers = False
+            for c in flat:
+                cid = c["id"]
+                if cid in handled:
+                    continue
+                author = c.get("username") or c.get("from", {}).get("username", "")
+                key = author.lower()
+                if key == OWN_USERNAME:
+                    done(cid)
+                    continue
+                rule = match(c.get("text"), rules)
+                if remember_only or not rule:
+                    done(cid)
+                    continue
+                if parse_ts(c["timestamp"]) < cutoff:
+                    stats["old"] += 1
+                    done(cid)
+                    continue
+                if key in already_talking:
+                    stats["talking"] += 1
+                    done(cid)
+                    continue
+                if key in sent_users:
+                    stats["repeat"] += 1
+                    done(cid)
+                    continue
+                if DRY_RUN:
+                    stats["would"] += 1
+                    log(f"[проверка] директ @{author} на «{c.get('text')}»")
+                    sent_users[key] = today
+                    continue
+                if stopped or stats["sent"] >= MAX_SENDS_PER_RUN:
+                    leftovers = True
+                    continue
+                try:
+                    api(
+                        "POST",
+                        f"{PAGE_ID}/messages",
+                        body={
+                            "recipient": {"comment_id": cid},
+                            "message": {"text": rule["message"]},
+                        },
+                    )
+                    log(f"Директ @{author}")
+                    stats["sent"] += 1
+                    sent_users[key] = today
+                    if rule["comment_replies"]:
+                        entry = {
+                            "comment_id": cid,
+                            "parent": c.get("_parent"),
+                            "author": author,
+                            "rule": rule["name"],
+                        }
+                        # Новым комментариям публичный ответ вперёд очереди,
+                        # старым (первый запуск) в конец, они идут медленно.
+                        if backlog:
+                            state["public_queue"].append(entry)
+                        else:
+                            state["public_queue"].insert(0, entry)
+                    done(cid)
+                    time.sleep(random.uniform(*PAUSE_SECONDS))
+                except StopSending as e:
+                    stopped = str(e)
+                    leftovers = True
+                    log(f"Остановка отправки до следующего запуска: {e}")
+                except RuntimeError as e:
+                    # Например, ответ на этот комментарий уже отправлен или человек
+                    # закрыл сообщения. Запоминаем и идём дальше.
+                    stats["failed"] += 1
+                    log(f"Не отправилось @{author}: {e}")
+                    done(cid)
 
-        if all_done:
             counts[mid] = total
+            if leftovers:
+                pending_media.add(mid)
+            else:
+                pending_media.discard(mid)
 
-    state["comment_counts"] = {m["id"]: counts[m["id"]] for m in media if m["id"] in counts}
-    state["sent_users"] = sent_users
-    state["last_run"] = today
+        public = 0
+        if not stopped:
+            try:
+                public = publish_queue(state, rules)
+            except StopSending as e:
+                log(f"Остановка публичных ответов до следующего запуска: {e}")
+    finally:
+        # Сохраняем, даже если запуск упал на середине: кому ушло, тому не повторяем.
+        finish(state, counts, pending_media, sent_users, media, today)
+
     if DRY_RUN:
-        log(f"Проверка: отправилось бы {would_send}.")
-    else:
-        save_state(state)
+        log(f"Проверка: директ ушёл бы {stats['would']} людям.")
     log(
-        f"Готово. Отправлено: {sent}. Пропущено: старше 7 дней {skipped_old}, "
-        f"уже есть переписка {skipped_talking}, тому же человеку повторно {skipped_repeat}."
+        f"Готово. Директ: {stats['sent']}, публичных ответов: {public}, "
+        f"в очереди публичных: {len(state['public_queue'])}. "
+        f"Пропущено: старше 7 дней {stats['old']}, уже есть переписка {stats['talking']}, "
+        f"повторно тому же человеку {stats['repeat']}, ошибок {stats['failed']}."
     )
+    if stopped:
+        sys.exit(1)  # красный запуск в Actions, чтобы было видно
 
 
 if __name__ == "__main__":
