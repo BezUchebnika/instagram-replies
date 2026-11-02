@@ -35,11 +35,15 @@ STATE_FILE = ROOT / "state.json"
 
 MEDIA_TO_SCAN = 50  # сколько последних публикаций проверять
 REPLY_WINDOW = timedelta(days=7)  # Meta разрешает личный ответ в течение 7 дней
-MAX_SENDS_PER_RUN = 150  # запас до лимита Meta (750 вызовов в час)
+MAX_SENDS_PER_RUN = 40  # до ~240 в час при запуске раз в 10 минут; лимит Meta 750
+PAUSE_SECONDS = (3, 5)  # случайная пауза между отправками
 REMEMBER_IDS = 20000  # сколько id обработанных комментариев хранить
 
 TOKEN = os.environ.get("IG_PAGE_TOKEN", "")
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("1", "true", "yes")
+# Что делать, если state.json ещё нет: remember (только запомнить) или backlog
+# (ответить за последние 7 дней). Пусто: ничего не делать, ждать ручного запуска.
+FIRST_RUN = os.environ.get("FIRST_RUN", "")
 
 
 def log(msg):
@@ -158,24 +162,62 @@ def save_state(state):
     )
 
 
+def recent_conversation_usernames(days=8):
+    """Ники людей, с которыми за последние дни уже была переписка в директе
+    (Артём писал вручную или сработал Instant Reply). Им старый чекап не шлём."""
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    convs = get_all(
+        f"{PAGE_ID}/conversations",
+        {"platform": "instagram", "fields": "participants,updated_time", "limit": 50},
+        stop=lambda c: parse_ts(c["updated_time"]) < since,
+    )
+    names = set()
+    for conv in convs:
+        for p in conv.get("participants", {}).get("data", []):
+            if p.get("username") and p["username"] != OWN_USERNAME:
+                names.add(p["username"].lower())
+    log(f"Переписок за последние {days} дн.: {len(convs)}, людей: {len(names)}")
+    return names
+
+
 def main():
     if not TOKEN:
         sys.exit("Нет ключа: секрет IG_PAGE_TOKEN не задан")
 
     rules = load_keywords()
     state = load_state()
-    baseline = state is None
-    if baseline:
-        # Первый запуск: всё, что уже есть, считаем обработанным, ничего не отправляем.
-        # Иначе ушли бы повторные сообщения тем, кому Артём уже ответил вручную.
-        log("Первый запуск: запоминаю существующие комментарии без отправки")
-        state = {"handled": [], "comment_counts": {}}
+    first_run = state is None
+    backlog = False
+    if first_run:
+        if FIRST_RUN == "remember":
+            # Всё, что уже есть, считаем обработанным, ничего не отправляем.
+            log("Первый запуск: запоминаю существующие комментарии без отправки")
+        elif FIRST_RUN == "backlog":
+            # Отвечаем на кодовые слова за последние 7 дней, кроме тех,
+            # с кем уже есть переписка в директе.
+            log("Первый запуск: отвечаю на комментарии за последние 7 дней")
+            backlog = True
+        else:
+            log("Ждём первого ручного запуска (Run workflow): пока ничего не делаю")
+            return
+        state = {"handled": [], "comment_counts": {}, "sent_users": {}}
+    state.setdefault("sent_users", {})
+
+    already_talking = recent_conversation_usernames() if backlog else set()
+    remember_only = first_run and not backlog
 
     handled = set(state["handled"])
     counts = state["comment_counts"]
     now = datetime.now(timezone.utc)
-    sent = 0
-    skipped_old = 0
+    today = now.strftime("%Y-%m-%d")
+    # Кому уже отправляли за последние 7 дней: второй раз тому же человеку не шлём.
+    week_ago = (now - REPLY_WINDOW).strftime("%Y-%m-%d")
+    sent_users = {u: d for u, d in state["sent_users"].items() if d >= week_ago}
+    sent = would_send = skipped_old = skipped_talking = skipped_repeat = 0
+
+    def done(cid):
+        handled.add(cid)
+        state["handled"].append(cid)
 
     media = api(
         "GET",
@@ -186,7 +228,7 @@ def main():
     for m in media:
         mid = m["id"]
         total = m.get("comments_count", 0)
-        if not baseline and counts.get(mid) == total:
+        if not first_run and counts.get(mid) == total:
             continue  # новых комментариев нет
 
         comments = get_all(
@@ -210,57 +252,69 @@ def main():
             if cid in handled:
                 continue
             author = c.get("username") or c.get("from", {}).get("username", "")
+            key = author.lower()
             if author == OWN_USERNAME:
-                handled.add(cid)
-                state["handled"].append(cid)
+                done(cid)
                 continue
             rule = match(c.get("text"), rules)
-            if baseline or not rule:
-                handled.add(cid)
-                state["handled"].append(cid)
+            if remember_only or not rule:
+                done(cid)
                 continue
-            if now - parse_ts(c["timestamp"]) > REPLY_WINDOW:
+            if now - parse_ts(c["timestamp"]) > REPLY_WINDOW - timedelta(hours=2):
                 skipped_old += 1
-                handled.add(cid)
-                state["handled"].append(cid)
+                done(cid)
+                continue
+            if key in already_talking:
+                skipped_talking += 1
+                done(cid)
+                continue
+            if key in sent_users:
+                skipped_repeat += 1
+                done(cid)
+                continue
+            if DRY_RUN:
+                would_send += 1
+                log(f"[проверка] ответил бы @{author} на «{c.get('text')}» ({rule['name']})")
+                sent_users[key] = today
                 continue
             if sent >= MAX_SENDS_PER_RUN:
                 all_done = False
                 continue
-
-            if DRY_RUN:
-                log(f"[проверка] ответил бы @{author} на «{c.get('text')}» ({rule['name']})")
-                if rule["comment_replies"]:
-                    log(f"[проверка] и под комментарием: {random.choice(rule['comment_replies'])}")
-            else:
-                try:
-                    api(
-                        "POST",
-                        f"{PAGE_ID}/messages",
-                        body={
-                            "recipient": {"comment_id": cid},
-                            "message": {"text": rule["message"]},
-                        },
-                    )
-                    log(f"Отправлено @{author} ({rule['name']})")
-                    sent += 1
-                    post_public_reply(c, author, rule)
-                    time.sleep(1)
-                except RuntimeError as e:
-                    # Например, ответ на этот комментарий уже отправлен (Meta не даёт
-                    # отправить второй). Запоминаем и идём дальше.
-                    log(f"Не отправилось @{author}: {e}")
-            handled.add(cid)
-            state["handled"].append(cid)
+            try:
+                api(
+                    "POST",
+                    f"{PAGE_ID}/messages",
+                    body={
+                        "recipient": {"comment_id": cid},
+                        "message": {"text": rule["message"]},
+                    },
+                )
+                log(f"Отправлено @{author} ({rule['name']})")
+                sent += 1
+                sent_users[key] = today
+                time.sleep(random.uniform(*PAUSE_SECONDS))
+                post_public_reply(c, author, rule)
+                time.sleep(random.uniform(*PAUSE_SECONDS))
+            except RuntimeError as e:
+                # Например, ответ на этот комментарий уже отправлен (Meta не даёт
+                # отправить второй). Запоминаем и идём дальше.
+                log(f"Не отправилось @{author}: {e}")
+            done(cid)
 
         if all_done:
             counts[mid] = total
 
     state["comment_counts"] = {m["id"]: counts[m["id"]] for m in media if m["id"] in counts}
-    state["last_run"] = now.strftime("%Y-%m-%d")
-    if not DRY_RUN:
+    state["sent_users"] = sent_users
+    state["last_run"] = today
+    if DRY_RUN:
+        log(f"Проверка: отправилось бы {would_send}.")
+    else:
         save_state(state)
-    log(f"Готово. Отправлено: {sent}. Пропущено старше 7 дней: {skipped_old}.")
+    log(
+        f"Готово. Отправлено: {sent}. Пропущено: старше 7 дней {skipped_old}, "
+        f"уже есть переписка {skipped_talking}, тому же человеку повторно {skipped_repeat}."
+    )
 
 
 if __name__ == "__main__":

@@ -9,6 +9,13 @@ on:
         description: "Только проверка: показать, кому ушёл бы ответ, ничего не отправляя"
         type: boolean
         default: true
+      first_run:
+        description: "Самый первый запуск: что делать со старыми комментариями (потом не важно)"
+        type: choice
+        default: "ответить за последние 7 дней"
+        options:
+          - "ответить за последние 7 дней"
+          - "только запомнить, не отвечать"
 
 concurrency:
   group: autoreply
@@ -20,7 +27,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -31,7 +38,14 @@ jobs:
         env:
           IG_PAGE_TOKEN: ${{ secrets.IG_PAGE_TOKEN }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
-        run: python autoreply.py
+          FIRST_RUN_CHOICE: ${{ inputs.first_run }}
+        run: |
+          case "$FIRST_RUN_CHOICE" in
+            "ответить за последние 7 дней") export FIRST_RUN=backlog ;;
+            "только запомнить, не отвечать") export FIRST_RUN=remember ;;
+            *) export FIRST_RUN="" ;;
+          esac
+          python autoreply.py
       - name: Сохранить, кому уже ответили
         run: |
           git config user.name "autoreply-bot"
