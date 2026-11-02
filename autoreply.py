@@ -40,9 +40,10 @@ RETRY_FILE = ROOT / "retry.json"
 MEDIA_TO_SCAN = 50  # сколько последних публикаций проверять
 REPLY_WINDOW = timedelta(days=7)  # Meta разрешает личный ответ в течение 7 дней
 SAFETY_MARGIN = timedelta(hours=2)  # не пытаемся отвечать на самом краю окна
-MAX_SENDS_PER_RUN = 40  # директ: до ~240 в час при запуске раз в 10 минут (лимит Meta 750)
-MAX_PUBLIC_PER_RUN = 5  # публичные ответы: до ~30 в час, остальные ждут в очереди
-PAUSE_SECONDS = (3, 5)  # случайная пауза между отправками
+MAX_SENDS_PER_RUN = 10  # директ за запуск; при запуске раз в 30 минут это ~20 в час
+DAILY_CAP = 200  # не больше директов в сутки, сколько бы ни набралось
+MAX_PUBLIC_PER_RUN = 3  # публичные ответы за запуск (~6 в час), остальные ждут в очереди
+PAUSE_SECONDS = (8, 20)  # случайная пауза между отправками
 FAIL_STREAK_STOP = 5  # столько одинаковых ошибок подряд = сбой у Meta, останавливаемся
 RETRY_START = 5  # повторных попыток за запуск, пока не убедимся, что Meta принимает
 REMEMBER_IDS = 30000  # сколько id обработанных комментариев хранить
@@ -290,6 +291,10 @@ def main():
     # Кому уже отправляли за последние 7 дней: второй раз тому же человеку не шлём.
     sent_users = {u: d for u, d in state["sent_users"].items() if d >= week_ago}
     stats = dict(sent=0, would=0, old=0, talking=0, repeat=0, failed=0)
+    sent_today = state.get("daily", {}).get(today, 0)  # сколько директов уже ушло сегодня (UTC)
+
+    def cap_reached():
+        return stats["sent"] >= MAX_SENDS_PER_RUN or sent_today + stats["sent"] >= DAILY_CAP
     stopped = None
 
     def done(cid):
@@ -354,7 +359,7 @@ def main():
                             and key not in sent_users and key not in already_talking
                             and parse_ts(c["timestamp"]) >= cutoff and match(c.get("text"), rules)):
                         continue
-                    if rstats["tried"] >= retry["limit"] or stopped or stats["sent"] >= MAX_SENDS_PER_RUN:
+                    if rstats["tried"] >= retry["limit"] or stopped or cap_reached():
                         rstats["left"] += 1
                         continue
                     is_retry = True
@@ -383,7 +388,7 @@ def main():
                     log(f"[проверка] директ @{author} на «{c.get('text')}»")
                     sent_users[key] = today
                     continue
-                if stopped or stats["sent"] >= MAX_SENDS_PER_RUN:
+                if stopped or cap_reached():
                     leftovers = True
                     continue
                 try:
@@ -405,7 +410,7 @@ def main():
                         retry_skip.add(f_cid)
                     streak = []
                     sent_users[key] = today
-                    if rule["comment_replies"]:
+                    if rule["comment_replies"] and not is_retry:
                         entry = {
                             "comment_id": cid,
                             "parent": c.get("_parent"),
@@ -459,6 +464,7 @@ def main():
                 log(f"Остановка публичных ответов до следующего запуска: {e}")
     finally:
         # Сохраняем, даже если запуск упал на середине: кому ушло, тому не повторяем.
+        state["daily"] = {today: sent_today + stats["sent"]}
         finish(state, counts, pending_media, sent_users, media, today)
         if retry and not DRY_RUN:
             if rstats["tried"] == 0 and rstats["left"] == 0 and not stopped and media:

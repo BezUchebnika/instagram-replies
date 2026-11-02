@@ -2,7 +2,7 @@ name: Instagram autoreply
 
 on:
   schedule:
-    - cron: "*/10 * * * *"  # каждые 10 мин (GitHub может запускать с задержкой)
+    - cron: "7,37 * * * *"  # раз в 30 минут (GitHub может запускать с задержкой)
   workflow_dispatch:
     inputs:
       dry_run:
@@ -28,7 +28,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - run: echo "STARTED_TS=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
@@ -72,7 +72,7 @@ jobs:
             | python3 -c "import json,sys,datetime as d;r=json.load(sys.stdin)['workflow_runs'];print('yes' if r and (d.datetime.now(d.timezone.utc)-d.datetime.fromisoformat(r[0]['created_at'].replace('Z','+00:00'))).total_seconds()<1800 else 'no')")
           if [ "$recent" = yes ]; then echo "Расписание работает, цепочка не нужна"; exit 0; fi
           elapsed=$(( $(date +%s) - STARTED_TS ))
-          wait=$(( 600 - elapsed )); [ $wait -gt 0 ] && sleep $wait
+          wait=$(( 1800 - elapsed )); [ $wait -gt 0 ] && sleep $wait
           curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" \
             "https://api.github.com/repos/${{ github.repository }}/actions/workflows/autoreply.yml/dispatches" \
             -d '{"ref":"main","inputs":{"dry_run":"false"}}'
