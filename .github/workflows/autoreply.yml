@@ -1,0 +1,43 @@
+name: Instagram autoreply
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"  # каждые 10 минут (GitHub может запускать с задержкой)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Только проверка: показать, кому ушёл бы ответ, ничего не отправляя"
+        type: boolean
+        default: true
+
+concurrency:
+  group: autoreply
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Проверить комментарии и ответить
+        env:
+          IG_PAGE_TOKEN: ${{ secrets.IG_PAGE_TOKEN }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+        run: python autoreply.py
+      - name: Сохранить, кому уже ответили
+        run: |
+          git config user.name "autoreply-bot"
+          git config user.email "autoreply-bot@users.noreply.github.com"
+          git add state.json 2>/dev/null || exit 0
+          git diff --cached --quiet && exit 0
+          git commit -m "Обновить список обработанных комментариев"
+          git pull --rebase
+          git push

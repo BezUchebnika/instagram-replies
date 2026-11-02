@@ -1,1 +1,48 @@
 # instagram-replies
+
+Автоответ BezUchebnika: когда под публикацией @bezuchebnikaeng пишут кодовое слово
+(например, «чекап»), автору комментария приходит одно сообщение в директ.
+
+## Как устроено
+
+- `autoreply.py` — скрипт. Каждые ~10 минут его запускает GitHub Actions
+  (`.github/workflows/autoreply.yml`).
+- `keywords.yml` — кодовые слова и тексты сообщений. Слова добавляются здесь,
+  код трогать не нужно.
+- `state.json` — какие комментарии уже обработаны. Скрипт ведёт его сам.
+- Ключ доступа лежит в секрете репозитория `IG_PAGE_TOKEN` (Settings → Secrets
+  and variables → Actions). Это Page-токен без срока действия.
+
+## Meta
+
+- Приложение «Replies» в developers.facebook.com, вариант **API setup with
+  Facebook login** (Instagram Login для новых приложений с октября 2026
+  недоступен; Unified login сознательно не выбран).
+- Instagram bezuchebnikaeng привязан к Facebook-странице «Английский с нуля
+  Просто Артём». ID Instagram: 17841479961455146, ID страницы: 1370667766133512.
+- Права: instagram_basic, instagram_manage_comments, instagram_manage_messages,
+  pages_show_list, pages_read_engagement, business_management.
+- Отправка: Private Replies (`POST /{page-id}/messages` с `comment_id`).
+  Ограничения Meta: только в течение 7 дней после комментария, один ответ на
+  комментарий, дальше писать можно только если человек ответил (24 часа).
+
+## Правила скрипта
+
+- Первый запуск (нет `state.json`) ничего не отправляет: только запоминает
+  существующие комментарии, чтобы не продублировать ручные ответы.
+- Комментарии самого аккаунта игнорируются. Проверять с другого аккаунта.
+- Слово ищется целиком: «Чекап!», «чек-ап» сработают, «чекапчик» нет.
+- Не больше 150 отправок за запуск (лимит Meta 750 вызовов в час).
+
+## Проверка без отправки
+
+Actions → Instagram autoreply → Run workflow → галочка «Только проверка»
+оставлена. В логе видно, кому ушёл бы ответ.
+
+## Если ключ перестал работать
+
+Запуски будут падать с ошибкой (GitHub пришлёт письмо). Получить новый Page-токен:
+Graph API Explorer → приложение Replies → Get User Access Token через
+конфигурацию «Replies token» → Access Token Debugger → Extend Access Token →
+в Explorer с новым токеном `me/accounts?fields=name,access_token` → взять
+`access_token` страницы → заменить секрет `IG_PAGE_TOKEN`.
