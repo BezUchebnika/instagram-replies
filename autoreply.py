@@ -12,6 +12,7 @@
 
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -79,9 +80,17 @@ def get_all(path, params, stop=None):
             data = json.loads(resp.read())
 
 
+# Латинские буквы, которые выглядят как русские. В словах, где есть кириллица,
+# их заменяем на русские: «чекaп» с латинской «a» = «чекап».
+LOOKALIKES = str.maketrans("aceopxkmtyb", "асеорхкмтуь")
+CYRILLIC = re.compile(r"[а-я]")
+
+
 def normalize(text):
     text = (text or "").lower().replace("ё", "е")
-    return re.sub(r"[^\w]+", " ", text).strip()
+    words = re.sub(r"[^\w]+", " ", text).split()
+    words = [w.translate(LOOKALIKES) if CYRILLIC.search(w) else w for w in words]
+    return " ".join(words)
 
 
 def load_keywords():
@@ -99,6 +108,9 @@ def load_keywords():
                 "name": name,
                 "words": [normalize(w) for w in words],
                 "message": message,
+                "comment_replies": [
+                    r.strip() for r in (entry.get("comment_replies") or []) if r and r.strip()
+                ],
             }
         )
     return rules
@@ -111,6 +123,22 @@ def match(text, rules):
             if w and f" {w} " in norm:
                 return rule
     return None
+
+
+def post_public_reply(comment, author, rule):
+    """Публичный ответ под комментарием. Ошибка здесь не мешает директу."""
+    if not rule["comment_replies"]:
+        return
+    text = random.choice(rule["comment_replies"])
+    target = comment["id"]
+    if comment.get("_parent"):
+        # На ответ в ветке Instagram отвечать не даёт: отвечаем в ту же ветку с упоминанием.
+        target = comment["_parent"]
+        text = f"@{author} {text}"
+    try:
+        api("POST", f"{target}/replies", {"message": text})
+    except RuntimeError as e:
+        log(f"Публичный ответ @{author} не опубликован: {e}")
 
 
 def parse_ts(ts):
@@ -172,7 +200,9 @@ def main():
         flat = []
         for c in comments:
             flat.append(c)
-            flat.extend(c.get("replies", {}).get("data", []))
+            for r in c.get("replies", {}).get("data", []):
+                r["_parent"] = c["id"]
+                flat.append(r)
 
         all_done = True
         for c in flat:
@@ -200,6 +230,8 @@ def main():
 
             if DRY_RUN:
                 log(f"[проверка] ответил бы @{author} на «{c.get('text')}» ({rule['name']})")
+                if rule["comment_replies"]:
+                    log(f"[проверка] и под комментарием: {random.choice(rule['comment_replies'])}")
             else:
                 try:
                     api(
@@ -212,6 +244,7 @@ def main():
                     )
                     log(f"Отправлено @{author} ({rule['name']})")
                     sent += 1
+                    post_public_reply(c, author, rule)
                     time.sleep(1)
                 except RuntimeError as e:
                     # Например, ответ на этот комментарий уже отправлен (Meta не даёт
