@@ -400,7 +400,8 @@ def main():
                             "message": {"text": rule["message"]},
                         },
                     )
-                    log(f"Директ @{author}" + (" (повтор)" if is_retry else ""))
+                    age_h = int((now - parse_ts(c["timestamp"])).total_seconds() // 3600)
+                    log(f"Директ @{author}" + (" (повтор)" if is_retry else "") + f" [публикация {mid}, {age_h} ч назад]")
                     stats["sent"] += 1
                     if is_retry:
                         rstats["ok"] += 1
@@ -431,7 +432,8 @@ def main():
                     log(f"Остановка отправки до следующего запуска: {e}")
                 except RuntimeError as e:
                     stats["failed"] += 1
-                    log(f"Не отправилось @{author}: {e}")
+                    age_h = int((now - parse_ts(c["timestamp"])).total_seconds() // 3600)
+                    log(f"Не отправилось @{author} [публикация {mid}, {age_h} ч назад]: {e}")
                     if '"error_subcode":2534025' in str(e):
                         # Комментарий не подходит для личного ответа (удалён, старый,
                         # уже отвечен, закрыты сообщения). Это точно про этого человека.
