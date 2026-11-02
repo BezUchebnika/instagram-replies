@@ -2,7 +2,7 @@ name: Instagram autoreply
 
 on:
   schedule:
-    - cron: "*/10 * * * *"  # каждые 10 минут (GitHub может запускать с задержкой)
+    - cron: "*/10 * * * *"  # каждые 10 мин (GitHub может запускать с задержкой)
   workflow_dispatch:
     inputs:
       dry_run:
