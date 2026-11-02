@@ -1,0 +1,27 @@
+name: Instagram stats
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "С какой даты считать (ГГГГ-ММ-ДД). Пусто: с начала сегодняшнего дня"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  stats:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Посчитать кодовые слова (только чтение)
+        env:
+          IG_PAGE_TOKEN: ${{ secrets.IG_PAGE_TOKEN }}
+          SINCE: ${{ inputs.since }}
+        run: python stats.py
