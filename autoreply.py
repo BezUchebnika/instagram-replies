@@ -53,8 +53,14 @@ FIRST_RUN = os.environ.get("FIRST_RUN", "")
 STOP_CODES = {4, 10, 17, 32, 190, 200, 368, 613, 80002, 80006}
 
 
+# Ошибки доступа: ключ недействителен или нет прав. Ждать бесполезно, нужен человек.
+AUTH_CODES = {10, 190, 200}
+
+
 class StopSending(Exception):
-    pass
+    def __init__(self, msg, code=None):
+        super().__init__(msg)
+        self.code = code
 
 
 def log(msg):
@@ -85,7 +91,9 @@ def _request(method, url, label, body=None):
         except ValueError:
             code = None
         if code in STOP_CODES or e.code == 429:
-            raise StopSending(f"{method} {label} -> лимит или блокировка Meta: {detail}") from None
+            raise StopSending(
+                f"{method} {label} -> лимит, блокировка или нет доступа: {detail}", code
+            ) from None
         raise RuntimeError(f"{method} {label} -> HTTP {e.code}: {detail}") from None
 
 
@@ -380,7 +388,7 @@ def main():
                     done(cid)
                     time.sleep(random.uniform(*PAUSE_SECONDS))
                 except StopSending as e:
-                    stopped = str(e)
+                    stopped = e
                     leftovers = True
                     log(f"Остановка отправки до следующего запуска: {e}")
                 except RuntimeError as e:
@@ -414,6 +422,15 @@ def main():
         f"Пропущено: старше 7 дней {stats['old']}, уже есть переписка {stats['talking']}, "
         f"повторно тому же человеку {stats['repeat']}, ошибок {stats['failed']}."
     )
+    # Есть ли ещё работа: хвост очереди директа или публичных ответов.
+    # Workflow по этому флагу сам запускает следующий шаг (пока расписание не работает).
+    more = bool(state["pending_media"] or state["public_queue"])
+    if stopped and getattr(stopped, "code", None) in AUTH_CODES:
+        more = False  # без доступа крутиться бессмысленно
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out and not DRY_RUN:
+        with open(out, "a") as f:
+            f.write(f"more={'true' if more else 'false'}\n")
     if stopped:
         sys.exit(1)  # красный запуск в Actions, чтобы было видно
 
