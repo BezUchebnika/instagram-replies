@@ -645,14 +645,61 @@
   "17999196069045426",
   "18154865179542315",
   "17889810657623660",
-  "18127906211299169"
+  "18127906211299169",
+  "18117278597079950",
+  "18236626066325259",
+  "18119906135611376",
+  "18091191317248546",
+  "17912588523588840",
+  "18184127554438004",
+  "17915778564550646",
+  "18149293030567313",
+  "17950790274344684",
+  "18200925190377382",
+  "18073667030772176",
+  "18084666794708445",
+  "17927399175435385",
+  "17932559844166721",
+  "18343135612279329",
+  "18119235317100783",
+  "17941181856392156",
+  "18110441759214419",
+  "18149279194528531",
+  "17911913355562006",
+  "18109331912211562",
+  "17949844599339938",
+  "18116972810275036",
+  "18142322425720704",
+  "17912584980482810",
+  "18114711242137902",
+  "17958386220258793",
+  "18341171410259040",
+  "18079935899740364",
+  "17918155461466085",
+  "18030990143692156",
+  "17963687787253640",
+  "18134958973663580",
+  "18437544685182355",
+  "18645169075054050",
+  "17933672181420307",
+  "17994853743063313",
+  "18073271291775371",
+  "18131569015872620",
+  "18099315494207752",
+  "18155721670540574",
+  "18117405034827751",
+  "17906870091349753",
+  "17989740731878687",
+  "18117939587092952",
+  "18147149209594222",
+  "18140741827728159"
  ],
  "comment_counts": {
   "18088955705302236": 139,
   "17958407421257874": 26,
   "17952216906288934": 4,
   "17876368158651099": 13,
-  "17955693660279122": 771,
+  "17955693660279122": 777,
   "17985028286898861": 36,
   "18130914793830773": 124,
   "17929443696185516": 38,
@@ -899,9 +946,259 @@
   "evgeniabozhenova": "2026-11-02",
   "da_doctor_of_medicine": "2026-11-02",
   "sintija.singh": "2026-11-02",
-  "kamahashimova": "2026-11-02"
+  "kamahashimova": "2026-11-02",
+  "tatyana_skomorokhovaragulina": "2026-11-02",
+  "valentinayavlovskaya": "2026-11-02",
+  "innelliee": "2026-11-02",
+  "al.isa2364": "2026-11-02",
+  "yulia_nirova": "2026-11-02",
+  "olena___babych": "2026-11-02",
+  "zhanna_ester": "2026-11-02",
+  "a.ch75": "2026-11-02",
+  "maria.nikolaeva.589": "2026-11-02",
+  "omarkhanovazhibek": "2026-11-02",
+  "juliettkonstantinova": "2026-11-02",
+  "alla_tagirmirzoevna": "2026-11-02",
+  "sasha_ionkina_": "2026-11-02",
+  "savv_p": "2026-11-02",
+  "shundrik_a": "2026-11-02",
+  "asrorabdulkadyrov": "2026-11-02",
+  "nataliyasilantyeva": "2026-11-02",
+  "zhyldyz66600": "2026-11-02",
+  "larissajaeschke": "2026-11-02",
+  "iuliaismakova": "2026-11-02",
+  "amaliya_luck": "2026-11-02",
+  "igoremizov": "2026-11-02",
+  "juliaprojekt": "2026-11-02",
+  "lenbar34": "2026-11-02",
+  "zamiraalimzhanova5": "2026-11-02",
+  "lidia_grineva_2020": "2026-11-02",
+  "agata.olivija": "2026-11-02",
+  "coco_shechka": "2026-11-02",
+  "wowdetailz": "2026-11-02",
+  "katerina.emk": "2026-11-02",
+  "iva_valusha": "2026-11-02",
+  "natashik_litvinova": "2026-11-02",
+  "sh.elen": "2026-11-02",
+  "___naida": "2026-11-02",
+  "egorova_beauty_doctor": "2026-11-02",
+  "tinaliu730": "2026-11-02",
+  "zhadyrashagataeva": "2026-11-02",
+  "lena_cheg": "2026-11-02",
+  "viktoriia_bibik_": "2026-11-02",
+  "viktoriiakonovalova3712": "2026-11-02"
  },
  "public_queue": [
+  {
+   "comment_id": "18099315494207752",
+   "parent": null,
+   "author": "egorova_beauty_doctor",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18131569015872620",
+   "parent": null,
+   "author": "___naida",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18073271291775371",
+   "parent": null,
+   "author": "sh.elen",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "17994853743063313",
+   "parent": null,
+   "author": "natashik_litvinova",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "17933672181420307",
+   "parent": null,
+   "author": "iva_valusha",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18645169075054050",
+   "parent": null,
+   "author": "katerina.emk",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18437544685182355",
+   "parent": null,
+   "author": "wowdetailz",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18134958973663580",
+   "parent": null,
+   "author": "coco_shechka",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "17963687787253640",
+   "parent": null,
+   "author": "agata.olivija",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18030990143692156",
+   "parent": null,
+   "author": "lidia_grineva_2020",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "17918155461466085",
+   "parent": null,
+   "author": "zamiraalimzhanova5",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18079935899740364",
+   "parent": null,
+   "author": "lenbar34",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18341171410259040",
+   "parent": null,
+   "author": "juliaprojekt",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "17958386220258793",
+   "parent": null,
+   "author": "igoremizov",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18114711242137902",
+   "parent": null,
+   "author": "amaliya_luck",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "17912584980482810",
+   "parent": null,
+   "author": "iuliaismakova",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18142322425720704",
+   "parent": null,
+   "author": "larissajaeschke",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18116972810275036",
+   "parent": null,
+   "author": "zhyldyz66600",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "17949844599339938",
+   "parent": null,
+   "author": "nataliyasilantyeva",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18109331912211562",
+   "parent": null,
+   "author": "asrorabdulkadyrov",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "17911913355562006",
+   "parent": null,
+   "author": "shundrik_a",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18149279194528531",
+   "parent": null,
+   "author": "savv_p",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18110441759214419",
+   "parent": null,
+   "author": "sasha_ionkina_",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "17941181856392156",
+   "parent": null,
+   "author": "alla_tagirmirzoevna",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18119235317100783",
+   "parent": null,
+   "author": "juliettkonstantinova",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18343135612279329",
+   "parent": null,
+   "author": "omarkhanovazhibek",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "17932559844166721",
+   "parent": null,
+   "author": "maria.nikolaeva.589",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "17927399175435385",
+   "parent": null,
+   "author": "a.ch75",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18084666794708445",
+   "parent": null,
+   "author": "zhanna_ester",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18073667030772176",
+   "parent": null,
+   "author": "olena___babych",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18200925190377382",
+   "parent": null,
+   "author": "yulia_nirova",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "17950790274344684",
+   "parent": null,
+   "author": "al.isa2364",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18149293030567313",
+   "parent": null,
+   "author": "innelliee",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "17915778564550646",
+   "parent": null,
+   "author": "valentinayavlovskaya",
+   "rule": "чекап"
+  },
+  {
+   "comment_id": "18117278597079950",
+   "parent": null,
+   "author": "tatyana_skomorokhovaragulina",
+   "rule": "чекап"
+  },
   {
    "comment_id": "17964295911218431",
    "parent": null,
