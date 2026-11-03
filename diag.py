@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 import json
 import autoreply as a
 
+CHECKUP_LINK = "Find-Your-Weak-Spot"
+
 MADRID = timezone(timedelta(hours=1))
 
 
@@ -13,14 +15,16 @@ def main():
     since = datetime.strptime(os.environ.get("SINCE", "2026-11-02 20:15"), "%Y-%m-%d %H:%M").replace(tzinfo=MADRID)
     # Наши последние переписки: кому и когда мы писали
     convs = a.get_all(f"{a.PAGE_ID}/conversations",
-                      {"platform": "instagram", "fields": "participants,updated_time,messages.limit(5){from,created_time}", "limit": 50},
+                      {"platform": "instagram", "fields": "participants,updated_time,messages.limit(10){from,created_time,message}", "limit": 50},
                       stop=lambda c: a.parse_ts(c["updated_time"]) < since, max_pages=40)
     last_out = {}
     for cv in convs:
         others = [p.get("username", "").lower() for p in cv.get("participants", {}).get("data", [])
                   if p.get("username", "").lower() != a.OWN_USERNAME]
         for msg in cv.get("messages", {}).get("data", []):
-            if (msg.get("from", {}).get("username") or "").lower() == a.OWN_USERNAME:
+            # Считаем только сообщения со ссылкой на чекап, обычная переписка не в счёт.
+            if (msg.get("from", {}).get("username") or "").lower() == a.OWN_USERNAME \
+                    and CHECKUP_LINK in (msg.get("message") or ""):
                 t = a.parse_ts(msg["created_time"])
                 for u in others:
                     last_out[u] = max(last_out.get(u, t), t)

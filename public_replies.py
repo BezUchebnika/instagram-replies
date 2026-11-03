@@ -2,7 +2,7 @@
 его отправляет встроенная автоматизация Meta («Comment to message»).
 
 Правила безопасности:
-- отвечаем только если автору уже ушёл директ от нашего аккаунта (Meta или бот);
+- отвечаем только если автору ушло сообщение со ссылкой на чекап (Meta или бот), не любая переписка;
 - не отвечаем, если под комментарием уже есть ответ нашего аккаунта;
 - не больше MAX_PER_RUN за запуск и DAILY_CAP в сутки, пауза между ответами;
 - 2 ошибки подряд или ошибка лимита/доступа: остановка до следующего запуска (красный запуск).
@@ -16,6 +16,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import autoreply as a
+
+CHECKUP_LINK = "Find-Your-Weak-Spot"
 
 STATE = Path(__file__).parent / "public_state.json"
 MAX_PER_RUN = 3
@@ -32,18 +34,20 @@ def log(m):
 
 
 def outgoing_dm_times(days=8):
-    """username -> время последнего сообщения от нашего аккаунта."""
+    """username -> время последнего сообщения со ссылкой на чекап от нашего аккаунта."""
     since = a.now_utc() - timedelta(days=days)
     convs = a.get_all(f"{a.PAGE_ID}/conversations",
                       {"platform": "instagram",
-                       "fields": "participants,updated_time,messages.limit(5){from,created_time}", "limit": 50},
+                       "fields": "participants,updated_time,messages.limit(10){from,created_time,message}", "limit": 50},
                       stop=lambda c: a.parse_ts(c["updated_time"]) < since, max_pages=30)
     out = {}
     for cv in convs:
         others = [p.get("username", "").lower() for p in cv.get("participants", {}).get("data", [])
                   if p.get("username", "").lower() != a.OWN_USERNAME]
         for msg in cv.get("messages", {}).get("data", []):
-            if (msg.get("from", {}).get("username") or "").lower() == a.OWN_USERNAME:
+            # Считаем только сообщения со ссылкой на чекап, обычная переписка не в счёт.
+            if (msg.get("from", {}).get("username") or "").lower() == a.OWN_USERNAME \
+                    and CHECKUP_LINK in (msg.get("message") or ""):
                 t = a.parse_ts(msg["created_time"])
                 for u in others:
                     out[u] = max(out.get(u, t), t)
