@@ -2,6 +2,7 @@
 получил ли автор сообщение от нас после комментария и есть ли наш ответ под комментарием."""
 import os
 from datetime import datetime, timedelta, timezone
+import json
 import autoreply as a
 
 MADRID = timezone(timedelta(hours=1))
@@ -24,6 +25,8 @@ def main():
                 for u in others:
                     last_out[u] = max(last_out.get(u, t), t)
     media = a.api("GET", f"{a.IG_USER_ID}/media", {"fields": "id", "limit": a.MEDIA_TO_SCAN}).get("data", [])
+    st = json.loads(a.STATE_FILE.read_text(encoding="utf-8")) if a.STATE_FILE.exists() else {}
+    known = set(st.get("sent_users", {})) | set(st.get("skip_users", {}))
     rows = []
     for m in media:
         cs = a.get_all(f"{m['id']}/comments",
@@ -36,10 +39,11 @@ def main():
             t = a.parse_ts(c["timestamp"])
             dm = u in last_out and last_out[u] >= t
             pub = any((r.get("username") or "").lower() == a.OWN_USERNAME for r in c.get("replies", {}).get("data", []))
-            rows.append((t, c.get("text", "").replace("\n", " ")[:40], dm, pub))
+            rows.append((t, c.get("text", "").replace("\n", " ")[:40], dm, pub, u in known))
     rows.sort()
-    for t, txt, dm, pub in rows:
-        print(f"{t.astimezone(MADRID):%d.%m %H:%M}  директ:{'ДА ' if dm else 'нет'}  ответ:{'ДА ' if pub else 'нет'}  «{txt}»")
+    for t, txt, dm, pub, kn in rows:
+        print(f"{t.astimezone(MADRID):%d.%m %H:%M}  директ:{'ДА ' if dm else 'нет'}  ответ:{'ДА ' if pub else 'нет'}  "
+              f"раньше писали:{'ДА ' if kn else 'нет'}  «{txt}»")
     print(f"Итого: {len(rows)}, директ получили {sum(r[2] for r in rows)}, публичный ответ {sum(r[3] for r in rows)}")
 
 
